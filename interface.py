@@ -1,4 +1,5 @@
 import streamlit as st
+import urllib.parse 
 from openai import OpenAI
 from duckduckgo_search import DDGS
 from datetime import datetime
@@ -155,7 +156,7 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                 prompt_sys += "RÈGLE 3 : Si on te demande l'actu, réponds EXACTEMENT [RECHERCHE: mot clé]. "
                 prompt_sys += "RÈGLE 4 : Si on te demande de créer un PDF, réponds EXACTEMENT [PDF: ton contenu]. "
                 prompt_sys += "RÈGLE 5 : Si on te demande de créer un PowerPoint, réponds EXACTEMENT [PPTX: titre | contenu]. "
-                
+                prompt_sys += "RÈGLE 6 : Si on te demande de générer ou dessiner une image, réponds EXACTEMENT [IMAGE: description précise en anglais]. "
                 response = client.chat.completions.create(
                     model="deepseek-chat",
                     messages=[{"role": "system", "content": prompt_sys}, {"role": "user", "content": prompt}],
@@ -184,7 +185,15 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                     infos = chercher_internet(mot_cle)
                     res = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "system", "content": f"Infos web : {infos}. Réponds naturellement."}, {"role": "user", "content": prompt}])
                     reply = res.choices[0].message.content
-                
+                    elif "[IMAGE:" in reply:
+                    description = reply.split("[IMAGE:")[1].split("]")[0].strip()
+                    st.info(f"🎨 Génération de l'image : {description}...")
+                    
+                    texte_encode = urllib.parse.quote(description)
+                    image_url = f"https://image.pollinations.ai/prompt/{texte_encode}?width=1024&height=1024&nologo=true"
+                    
+                    st.image(image_url, caption=description)
+                    reply = f"Voici l'image que j'ai générée pour vous ! Elle s'affiche ci-dessus."                
                 elif "[PDF:" in reply:
                     contenu_pdf = reply.split("[PDF:")[1].split("]")[0].strip()
                     fichier_pdf = creer_pdf(contenu_pdf)
