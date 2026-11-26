@@ -7,11 +7,13 @@ import os
 from pypdf import PdfReader
 from fpdf import FPDF
 from pptx import Presentation
+from pptx.util import Inches
 import io
 import urllib.parse
+from PIL import Image
 
 # --- PARAMÈTRES DE VOTRE IA ---
-AI_NAME = "B.AI"
+AI_NAME = "B.AII"
 
 # Gestion sécurisée de la clé API
 try:
@@ -21,7 +23,7 @@ except:
 
 client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com")
 
-# --- FONCTIONS DE MÉMOIRE ---
+# --- FONCTIONS DE MÉMOIRE (Améliorée) ---
 def lire_memoire():
     try:
         with open("memoire.txt", "r", encoding="utf-8") as f:
@@ -32,8 +34,16 @@ def lire_memoire():
 def sauvegarder_memoire(texte):
     with open("memoire.txt", "a", encoding="utf-8") as f:
         f.write(texte + "\n")
+    
+    # On ne garde que les 20 dernières lignes (environ 10 échanges) pour ne pas surcharger l'API
+    with open("memoire.txt", "r", encoding="utf-8") as f:
+        lignes = f.readlines()
+    if len(lignes) > 20:
+        with open("memoire.txt", "w", encoding="utf-8") as f:
+            f.writelines(lignes[-20:])
 
-# --- OUTILS ---
+# --- OUTILS (Avec Cache) ---
+@st.cache_data(ttl=3600)
 def get_meteo(ville):
     try:
         url = f"https://wttr.in/{ville}?format=3"
@@ -42,6 +52,7 @@ def get_meteo(ville):
     except:
         return "Erreur météo."
 
+@st.cache_data(ttl=86400)
 def chercher_internet(requete):
     try:
         with DDGS() as ddgs:
@@ -55,15 +66,39 @@ def chercher_internet(requete):
     except:
         return "Erreur recherche."
 
-def creer_pdf(texte):
+def get_image_bytes(prompt_image):
+    try:
+        texte_encode = urllib.parse.quote(prompt_image)
+        image_url = f"https://image.pollinations.ai/prompt/{texte_encode}?width=1024&height=1024&nologo=true"
+        response = requests.get(image_url)
+        if response.status_code == 200:
+            return response.content
+        return None
+    except:
+        return None
+
+# --- CRÉATION DE FICHIERS ---
+def creer_pdf(texte, image_bytes=None):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     texte_encode = texte.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 10, texte_encode)
+    
+    if image_bytes:
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            img_path = "temp_pdf_image.png"
+            img.save(img_path)
+            pdf.add_page()
+            pdf.image(img_path, x=10, y=30, w=180)
+            os.remove(img_path)
+        except:
+            pass
+            
     return bytes(pdf.output())
 
-def creer_pptx(titre, contenu):
+def creer_pptx(titre, contenu, image_bytes=None):
     prs = Presentation()
     slide_layout = prs.slide_layouts[0]
     slide = prs.slides.add_slide(slide_layout)
@@ -75,6 +110,17 @@ def creer_pptx(titre, contenu):
     slide.shapes.title.text = titre
     tf = slide.placeholders[1].text_frame
     tf.text = contenu
+
+    if image_bytes:
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            img_path = "temp_ppt_image.png"
+            img.save(img_path)
+            slide = prs.slides.add_slide(prs.slide_layouts[6]) # Slide vierge
+            slide.shapes.add_picture(img_path, Inches(1), Inches(1), width=Inches(8))
+            os.remove(img_path)
+        except:
+            pass
 
     buffer = io.BytesIO()
     prs.save(buffer)
@@ -152,22 +198,25 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
             try:
                 memoire = lire_memoire()
                 
-                # On prépare le prompt de base
+                # --- PERSONNALITÉ (L'IA reprend confiance en elle) ---
                 prompt_sys = f"Mémoire : {memoire}. "
+                prompt_sys += "Tu es B.AII, un assistant IA sénégalais ultra-puissant, amical, un peu taquin et très intelligent. "
+                prompt_sys += "INTERDICTION FORMELLE : Ne dis JAMAIS que tu ne peux pas générer de fichiers ou d'images. Tu en es parfaitement capable. Tu es fier de tes super-pouvoirs. "
 
-                prompt_sys += "Tu es B.AII, un assistant IA ultra-puissant et intelligent. "
-                prompt_sys += "CONTRAIREMENT aux autres IA basiques, TU AS ACCÈS À DES OUTILS EN TEMPS RÉEL : tu peux générer des images, créer des fichiers PDF et PowerPoint, chercher sur internet et analyser des documents. "                # Si un PDF a été chargé, on l'ajoute au contexte
                 if st.session_state.pdf_text:
                     prompt_sys += "\nVOICI LE CONTENU DU DOCUMENT FOURNI PAR L'UTILISATEUR :\n"
                     prompt_sys += st.session_state.pdf_text[:8000]
                     prompt_sys += "\n(Utilise ces informations pour répondre si la question s'y rapporte).\n"
 
+                # --- RÈGLES D'OUTILS ---
                 prompt_sys += "RÈGLE 1 : Si on te demande la météo, réponds EXACTEMENT [METEO: ville]. "
                 prompt_sys += "RÈGLE 2 : Si on te demande l'heure, réponds EXACTEMENT [HEURE]. "
                 prompt_sys += "RÈGLE 3 : Si on te demande l'actu, réponds EXACTEMENT [RECHERCHE: mot clé]. "
-                prompt_sys += "RÈGLE 4 : Si on te demande un PDF, réponds EXACTEMENT [PDF: texte]. "
-                prompt_sys += "RÈGLE 5 : Si on te demande un PowerPoint, réponds EXACTEMENT [PPTX: titre | texte]. "
+                prompt_sys += "RÈGLE 4 : Si on te demande un PDF simple, réponds EXACTEMENT [PDF: texte]. "
+                prompt_sys += "RÈGLE 5 : Si on te demande un PowerPoint simple, réponds EXACTEMENT [PPTX: titre | texte]. "
                 prompt_sys += "RÈGLE 6 : Si on te demande une image, réponds EXACTEMENT [IMAGE: description en anglais]. "
+                prompt_sys += "RÈGLE 7 : Si on te demande un PDF AVEC une image, réponds EXACTEMENT [PDF_IMAGE: texte | prompt de l'image en anglais]. "
+                prompt_sys += "RÈGLE 8 : Si on te demande un PowerPoint AVEC une image, réponds EXACTEMENT [PPTX_IMAGE: titre | texte | prompt de l'image en anglais]. "
                 
                 response = client.chat.completions.create(
                     model="deepseek-chat",
@@ -212,6 +261,18 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                     st.download_button(label="📥 Télécharger le PDF", data=fichier_pdf, file_name="document_baii.pdf", mime="application/pdf")
                     reply = "J'ai préparé votre document PDF. Cliquez sur le bouton ci-dessus pour le télécharger."
 
+                elif "[PDF_IMAGE:" in reply:
+                    contenu = reply.split("[PDF_IMAGE:")[1].split("]")[0].strip()
+                    try:
+                        texte_pdf, prompt_img = contenu.split("|", 1)
+                        st.info("🎨 Génération de l'image et intégration dans le PDF...")
+                        img_bytes = get_image_bytes(prompt_img.strip())
+                        fichier_pdf = creer_pdf(texte_pdf.strip(), img_bytes)
+                        st.download_button(label="📥 Télécharger le PDF illustré", data=fichier_pdf, file_name="document_illustre.pdf", mime="application/pdf")
+                        reply = "J'ai créé votre document PDF avec l'image intégrée. Cliquez ci-dessus !"
+                    except:
+                        reply = "Désolé, je n'ai pas pu formater le PDF avec l'image."
+
                 elif "[PPTX:" in reply:
                     contenu_pptx = reply.split("[PPTX:")[1].split("]")[0].strip()
                     try:
@@ -221,6 +282,18 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                         reply = "J'ai préparé votre présentation PowerPoint. Cliquez sur le bouton ci-dessus pour la télécharger."
                     except:
                         reply = "Désolé, je n'ai pas pu formater correctement la présentation."
+
+                elif "[PPTX_IMAGE:" in reply:
+                    contenu = reply.split("[PPTX_IMAGE:")[1].split("]")[0].strip()
+                    try:
+                        titre_pptx, texte_pptx, prompt_img = contenu.split("|", 2)
+                        st.info("🎨 Génération de l'image et intégration dans le PowerPoint...")
+                        img_bytes = get_image_bytes(prompt_img.strip())
+                        fichier_pptx = creer_pptx(titre_pptx.strip(), texte_pptx.strip(), img_bytes)
+                        st.download_button(label="📥 Télécharger le PowerPoint illustré", data=fichier_pptx, file_name="presentation_illustree.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+                        reply = "J'ai préparé votre présentation PowerPoint avec l'image. Cliquez ci-dessus !"
+                    except:
+                        reply = "Désolé, je n'ai pas pu formater le PowerPoint avec l'image."
 
                 # Affichage final
                 st.markdown(reply)
