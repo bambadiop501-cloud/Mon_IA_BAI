@@ -144,7 +144,7 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
             try:
                 memoire = lire_memoire()                    
                     # On prépare le prompt de base
-                    prompt_sys = f"Mémoire : {memoire}. "
+                prompt_sys = f"Mémoire : {memoire}. "
 
                     # Si un PDF a été chargé, on l'ajoute au contexte
                     if st.session_state.pdf_text:
