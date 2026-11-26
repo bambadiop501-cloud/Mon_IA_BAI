@@ -155,7 +155,8 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                 # On prépare le prompt de base
                 prompt_sys = f"Mémoire : {memoire}. "
 
-                # Si un PDF a été chargé, on l'ajoute au contexte
+                prompt_sys += "Tu es B.AII, un assistant IA ultra-puissant et intelligent. "
+                prompt_sys += "CONTRAIREMENT aux autres IA basiques, TU AS ACCÈS À DES OUTILS EN TEMPS RÉEL : tu peux générer des images, créer des fichiers PDF et PowerPoint, chercher sur internet et analyser des documents. "                # Si un PDF a été chargé, on l'ajoute au contexte
                 if st.session_state.pdf_text:
                     prompt_sys += "\nVOICI LE CONTENU DU DOCUMENT FOURNI PAR L'UTILISATEUR :\n"
                     prompt_sys += st.session_state.pdf_text[:8000]
