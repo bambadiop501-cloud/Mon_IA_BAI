@@ -8,14 +8,14 @@ from pypdf import PdfReader
 
 # --- PARAMÈTRES DE VOTRE IA ---
 AI_NAME = "B.AI" 
-API_KEY = "sk-312b59e9c1d14998bbad5e040c580e8b" # <-- METTEZ VOTRE CLÉ ICI
+ # <-- METTEZ VOTRE CLÉ ICI
 
 # Sur internet, la clé sera cachée dans les secrets de Streamlit. En local, on la met ici.
+
 try:
     API_KEY = st.secrets["DEEPSEEK_API_KEY"]
 except:
-    API_KEY = "sk-312b59e9c1d14998bbad5e040c580e8b" # <-- Votre clé en local
-    
+    API_KEY = "VOTRE_CLE_ICI"
 client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com")
 # --- FONCTIONS DE MÉMOIRE ---
 def lire_memoire():
