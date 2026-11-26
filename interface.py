@@ -10,7 +10,7 @@ from pptx import Presentation
 import io
 
 # --- PARAMÈTRES DE VOTRE IA ---
-AI_NAME = "B.AII" 
+AI_NAME = "B.AI" 
 try:
     API_KEY = st.secrets["DEEPSEEK_API_KEY"]
 except:
@@ -52,7 +52,7 @@ def creer_pdf(texte):
     pdf.set_font("Arial", size=12)
     texte_encode = texte.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 10, texte_encode)
-    return pdf.output(dest='S').encode('latin-1')
+    return bytes(pdf.output())  #
 
 def creer_pptx(titre, contenu):
     prs = Presentation()
