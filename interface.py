@@ -5,18 +5,19 @@ from datetime import datetime
 import requests
 import os
 from pypdf import PdfReader
+from fpdf import FPDF
+from pptx import Presentation
+import io
 
 # --- PARAMÈTRES DE VOTRE IA ---
-AI_NAME = "B.AI" 
- # <-- METTEZ VOTRE CLÉ ICI
-
-# Sur internet, la clé sera cachée dans les secrets de Streamlit. En local, on la met ici.
-
+AI_NAME = "B.AII" 
 try:
     API_KEY = st.secrets["DEEPSEEK_API_KEY"]
 except:
-    API_KEY = "VOTRE_CLE_ICI"
+    API_KEY = "COLLEZ_VOTRE_CLE_DEEPSEEK_ICI" 
+
 client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com")
+
 # --- FONCTIONS DE MÉMOIRE ---
 def lire_memoire():
     try:
@@ -44,6 +45,32 @@ def chercher_internet(requete):
             return "".join([f"- {r['title']} : {r['body']}\n" for r in resultats]) if resultats else "Aucun résultat."
     except: return "Erreur recherche."
 
+# --- CRÉATION DE FICHIERS ---
+def creer_pdf(texte):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    texte_encode = texte.encode('latin-1', 'replace').decode('latin-1')
+    pdf.multi_cell(0, 10, texte_encode)
+    return pdf.output(dest='S').encode('latin-1')
+
+def creer_pptx(titre, contenu):
+    prs = Presentation()
+    slide_layout = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(slide_layout)
+    slide.shapes.title.text = titre
+    slide.placeholders[1].text = "Généré par B.AII"
+    
+    slide_layout = prs.slide_layouts[1]
+    slide = prs.slides.add_slide(slide_layout)
+    slide.shapes.title.text = titre
+    tf = slide.placeholders[1].text_frame
+    tf.text = contenu
+
+    buffer = io.BytesIO()
+    prs.save(buffer)
+    return buffer.getvalue()
+
 # --- INTERFACE & ANIMATIONS CSS ---
 st.set_page_config(page_title=AI_NAME, page_icon="logo.png", layout="centered")
 
@@ -54,7 +81,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialisation du stockage pour le texte du PDF
 if "pdf_text" not in st.session_state:
     st.session_state.pdf_text = ""
 
@@ -70,7 +96,6 @@ with st.sidebar:
     
     st.divider()
     
-    # --- LECTEUR DE PDF ---
     st.subheader("📄 Analyser un document")
     uploaded_file = st.file_uploader("Chargez un fichier PDF", type="pdf")
     if uploaded_file is not None:
@@ -118,10 +143,8 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
             try:
                 memoire = lire_memoire()
                 
-                # On prépare le prompt de base
                 prompt_sys = f"Mémoire : {memoire}. "
 
-                # Si un PDF a été chargé, on l'ajoute au contexte
                 if st.session_state.pdf_text:
                     prompt_sys += "\nVOICI LE CONTENU DU DOCUMENT FOURNI PAR L'UTILISATEUR :\n"
                     prompt_sys += st.session_state.pdf_text[:8000]
@@ -129,7 +152,9 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
 
                 prompt_sys += "RÈGLE 1 : Si on te demande la météo, réponds EXACTEMENT [METEO: ville]. "
                 prompt_sys += "RÈGLE 2 : Si on te demande l'heure, réponds EXACTEMENT [HEURE]. "
-                prompt_sys += "RÈGLE 3 : Si on te demande l'actu, réponds EXACTEMENT [RECHERCHE: mot clé]."
+                prompt_sys += "RÈGLE 3 : Si on te demande l'actu, réponds EXACTEMENT [RECHERCHE: mot clé]. "
+                prompt_sys += "RÈGLE 4 : Si on te demande de créer un PDF, réponds EXACTEMENT [PDF: ton contenu]. "
+                prompt_sys += "RÈGLE 5 : Si on te demande de créer un PowerPoint, réponds EXACTEMENT [PPTX: titre | contenu]. "
                 
                 response = client.chat.completions.create(
                     model="deepseek-chat",
@@ -144,41 +169,48 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                     ville = reply.split("[METEO:")[1].split("]")[0].strip()
                     st.info(f"🌤️ Récupération de la météo pour : {ville}...")
                     infos = get_meteo(ville)
-                    res = client.chat.completions.create(
-                        model="deepseek-chat",
-                        messages=[
-                            {"role": "system", "content": f"Météo : {infos}. Réponds naturellement."},
-                            {"role": "user", "content": prompt}
-                        ]
-                    )
+                    res = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "system", "content": f"Météo : {infos}. Réponds naturellement."}, {"role": "user", "content": prompt}])
                     reply = res.choices[0].message.content
 
                 elif "[HEURE]" in reply:
                     heure_act = datetime.now().strftime("%H:%M")
                     date_act = datetime.now().strftime("%d/%m/%Y")
-                    res = client.chat.completions.create(
-                        model="deepseek-chat",
-                        messages=[
-                            {"role": "system", "content": f"Il est {heure_act}, le {date_act}. Réponds naturellement."},
-                            {"role": "user", "content": prompt}
-                        ]
-                    )
+                    res = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "system", "content": f"Il est {heure_act}, le {date_act}. Réponds naturellement."}, {"role": "user", "content": prompt}])
                     reply = res.choices[0].message.content
 
                 elif "[RECHERCHE:" in reply:
                     mot_cle = reply.split("[RECHERCHE:")[1].split("]")[0].strip()
                     st.info(f"🔍 Recherche web : {mot_cle}...")
                     infos = chercher_internet(mot_cle)
-                    res = client.chat.completions.create(
-                        model="deepseek-chat",
-                        messages=[
-                            {"role": "system", "content": f"Infos web : {infos}. Réponds naturellement."},
-                            {"role": "user", "content": prompt}
-                        ]
-                    )
+                    res = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "system", "content": f"Infos web : {infos}. Réponds naturellement."}, {"role": "user", "content": prompt}])
                     reply = res.choices[0].message.content
+                
+                elif "[PDF:" in reply:
+                    contenu_pdf = reply.split("[PDF:")[1].split("]")[0].strip()
+                    fichier_pdf = creer_pdf(contenu_pdf)
+                    st.download_button(
+                        label="📥 Télécharger le PDF",
+                        data=fichier_pdf,
+                        file_name="document_baii.pdf",
+                        mime="application/pdf"
+                    )
+                    reply = "J'ai préparé votre document PDF. Cliquez sur le bouton ci-dessus pour le télécharger."
 
-                # Affichage final et sauvegarde
+                elif "[PPTX:" in reply:
+                    contenu_pptx = reply.split("[PPTX:")[1].split("]")[0].strip()
+                    try:
+                        titre_pptx, texte_pptx = contenu_pptx.split("|", 1)
+                        fichier_pptx = creer_pptx(titre_pptx.strip(), texte_pptx.strip())
+                        st.download_button(
+                            label="📥 Télécharger le PowerPoint",
+                            data=fichier_pptx,
+                            file_name="presentation_baii.pptx",
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                        )
+                        reply = "J'ai préparé votre présentation PowerPoint. Cliquez sur le bouton ci-dessus pour la télécharger."
+                    except:
+                        reply = "Désolé, je n'ai pas pu formater correctement la présentation (il manque le séparateur '|')."
+
                 st.markdown(reply)
                 st.session_state.messages.append({"role": "assistant", "content": reply})
                 sauvegarder_memoire(f"Utilisateur: {prompt}\nIA: {reply}")
