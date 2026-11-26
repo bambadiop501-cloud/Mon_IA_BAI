@@ -140,11 +140,9 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("assistant", avatar="logo.png"):
-        with st.spinner(f"{AI_NAME} réfléchit...")
-                
-                try:
-                    memoire = lire_memoire()
-                    
+        with st.spinner(f"{AI_NAME} réfléchit..."):
+            try:
+                memoire = lire_memoire()                    
                     # On prépare le prompt de base
                     prompt_sys = f"Mémoire : {memoire}. "
 
