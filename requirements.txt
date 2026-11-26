@@ -3,3 +3,5 @@ openai
 duckduckgo-search
 requests
 pypdf
+fpdf2
+python-pptx
