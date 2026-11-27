@@ -23,7 +23,7 @@ except:
 
 client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com")
 
-# --- FONCTIONS DE MÉMOIRE (Améliorée) ---
+# --- FONCTIONS DE MÉMOIRE ---
 def lire_memoire():
     try:
         with open("memoire.txt", "r", encoding="utf-8") as f:
@@ -34,15 +34,13 @@ def lire_memoire():
 def sauvegarder_memoire(texte):
     with open("memoire.txt", "a", encoding="utf-8") as f:
         f.write(texte + "\n")
-    
-    # On ne garde que les 20 dernières lignes (environ 10 échanges) pour ne pas surcharger l'API
     with open("memoire.txt", "r", encoding="utf-8") as f:
         lignes = f.readlines()
     if len(lignes) > 20:
         with open("memoire.txt", "w", encoding="utf-8") as f:
             f.writelines(lignes[-20:])
 
-# --- OUTILS (Avec Cache) ---
+# --- OUTILS ---
 @st.cache_data(ttl=3600)
 def get_meteo(ville):
     try:
@@ -65,6 +63,16 @@ def chercher_internet(requete):
             return texte
     except:
         return "Erreur recherche."
+
+def chercher_image_reelle(requete):
+    try:
+        with DDGS() as ddgs:
+            resultats = list(ddgs.images(requete, max_results=1))
+            if resultats:
+                return resultats[0]['image'] # Renvoie le lien de l'image
+            return None
+    except:
+        return None
 
 def get_image_bytes(prompt_image):
     try:
@@ -95,7 +103,6 @@ def creer_pdf(texte, image_bytes=None):
             os.remove(img_path)
         except:
             pass
-            
     return bytes(pdf.output())
 
 def creer_pptx(titre, contenu, image_bytes=None):
@@ -116,7 +123,7 @@ def creer_pptx(titre, contenu, image_bytes=None):
             img = Image.open(io.BytesIO(image_bytes))
             img_path = "temp_ppt_image.png"
             img.save(img_path)
-            slide = prs.slides.add_slide(prs.slide_layouts[6]) # Slide vierge
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
             slide.shapes.add_picture(img_path, Inches(1), Inches(1), width=Inches(8))
             os.remove(img_path)
         except:
@@ -198,7 +205,7 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
             try:
                 memoire = lire_memoire()
                 
-                # --- PERSONNALITÉ (L'IA reprend confiance en elle) ---
+                # --- PERSONNALITÉ ---
                 prompt_sys = f"Mémoire : {memoire}. "
                 prompt_sys += "Tu es B.AII, un assistant IA sénégalais ultra-puissant, amical, un peu taquin et très intelligent. "
                 prompt_sys += "INTERDICTION FORMELLE : Ne dis JAMAIS que tu ne peux pas générer de fichiers ou d'images. Tu en es parfaitement capable. Tu es fier de tes super-pouvoirs. "
@@ -214,9 +221,10 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                 prompt_sys += "RÈGLE 3 : Si on te demande l'actu, réponds EXACTEMENT [RECHERCHE: mot clé]. "
                 prompt_sys += "RÈGLE 4 : Si on te demande un PDF simple, réponds EXACTEMENT [PDF: texte]. "
                 prompt_sys += "RÈGLE 5 : Si on te demande un PowerPoint simple, réponds EXACTEMENT [PPTX: titre | texte]. "
-                prompt_sys += "RÈGLE 6 : Si on te demande une image, réponds EXACTEMENT [IMAGE: description en anglais]. "
-                prompt_sys += "RÈGLE 7 : Si on te demande un PDF AVEC une image, réponds EXACTEMENT [PDF_IMAGE: texte | prompt de l'image en anglais]. "
-                prompt_sys += "RÈGLE 8 : Si on te demande un PowerPoint AVEC une image, réponds EXACTEMENT [PPTX_IMAGE: titre | texte | prompt de l'image en anglais]. "
+                prompt_sys += "RÈGLE 6 : Si on te demande de générer ou dessiner une image, réponds EXACTEMENT [IMAGE: description en anglais]. "
+                prompt_sys += "RÈGLE 7 : Si on te demande un PDF AVEC une image générée, réponds EXACTEMENT [PDF_IMAGE: texte | prompt de l'image en anglais]. "
+                prompt_sys += "RÈGLE 8 : Si on te demande un PowerPoint AVEC une image générée, réponds EXACTEMENT [PPTX_IMAGE: titre | texte | prompt de l'image en anglais]. "
+                prompt_sys += "RÈGLE 9 : Si on te demande une VRAIE photo ou une image réelle, réponds EXACTEMENT [IMAGE_REELLE: description en anglais]. "
                 
                 response = client.chat.completions.create(
                     model="deepseek-chat",
@@ -247,13 +255,23 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                     res = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "system", "content": f"Infos web : {infos}. Réponds naturellement."}, {"role": "user", "content": prompt}])
                     reply = res.choices[0].message.content
 
+                elif "[IMAGE_REELLE:" in reply:
+                    description = reply.split("[IMAGE_REELLE:")[1].split("]")[0].strip()
+                    st.info(f"🔍 Recherche d'une vraie photo pour : {description}...")
+                    image_url = chercher_image_reelle(description)
+                    if image_url:
+                        st.image(image_url, caption=description)
+                        reply = "Voici une vraie photo trouvée sur internet pour votre demande."
+                    else:
+                        reply = "Désolé, je n'ai pas trouvé de vraie photo correspondante sur internet."
+
                 elif "[IMAGE:" in reply:
                     description = reply.split("[IMAGE:")[1].split("]")[0].strip()
-                    st.info(f"🎨 Génération de l'image : {description}...")
+                    st.info(f"🎨 Génération de l'image par IA : {description}...")
                     texte_encode = urllib.parse.quote(description)
                     image_url = f"https://image.pollinations.ai/prompt/{texte_encode}?width=1024&height=1024&nologo=true"
                     st.image(image_url, caption=description)
-                    reply = "Voici l'image que j'ai générée pour vous ! Elle s'affiche ci-dessus."
+                    reply = "Voici l'image générée par l'IA."
                 
                 elif "[PDF:" in reply:
                     contenu_pdf = reply.split("[PDF:")[1].split("]")[0].strip()
