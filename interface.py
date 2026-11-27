@@ -15,13 +15,22 @@ from PIL import Image
 # --- PARAMÈTRES DE VOTRE IA ---
 AI_NAME = "B.AII"
 
-# Gestion sécurisée de la clé API
 try:
     API_KEY = st.secrets["DEEPSEEK_API_KEY"]
 except:
     API_KEY = "COLLEZ_VOTRE_CLE_DEEPSEEK_ICI" # <-- METTEZ VOTRE CLÉ ICI
 
 client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com")
+
+# --- INITIALISATION DE LA MÉMOIRE DE LA PAGE ---
+if "pdf_text" not in st.session_state:
+    st.session_state.pdf_text = ""
+if "file_to_download" not in st.session_state:
+    st.session_state.file_to_download = None
+if "file_name" not in st.session_state:
+    st.session_state.file_name = ""
+if "file_type" not in st.session_state:
+    st.session_state.file_type = ""
 
 # --- FONCTIONS DE MÉMOIRE ---
 def lire_memoire():
@@ -66,10 +75,12 @@ def chercher_internet(requete):
 
 def chercher_image_reelle(requete):
     try:
+        # On ne garde que les 3 premiers mots pour que la recherche fonctionne bien
+        requete_courte = " ".join(requete.split()[:3])
         with DDGS() as ddgs:
-            resultats = list(ddgs.images(requete, max_results=1))
+            resultats = list(ddgs.images(requete_courte, max_results=1))
             if resultats:
-                return resultats[0]['image'] # Renvoie le lien de l'image
+                return resultats[0]['image']
             return None
     except:
         return None
@@ -143,9 +154,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-if "pdf_text" not in st.session_state:
-    st.session_state.pdf_text = ""
-
 # --- MENU LATÉRAL (SIDEBAR) ---
 with st.sidebar:
     try:
@@ -175,6 +183,7 @@ with st.sidebar:
 
     if st.button("🗑️ Effacer l'écran", use_container_width=True):
         st.session_state.messages = []
+        st.session_state.file_to_download = None
         st.rerun()
         
     if st.button("🧠 Réinitialiser la mémoire", use_container_width=True):
@@ -205,26 +214,24 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
             try:
                 memoire = lire_memoire()
                 
-                # --- PERSONNALITÉ ---
                 prompt_sys = f"Mémoire : {memoire}. "
                 prompt_sys += "Tu es B.AII, un assistant IA sénégalais ultra-puissant, amical, un peu taquin et très intelligent. "
-                prompt_sys += "INTERDICTION FORMELLE : Ne dis JAMAIS que tu ne peux pas générer de fichiers ou d'images. Tu en es parfaitement capable. Tu es fier de tes super-pouvoirs. "
+                prompt_sys += "INTERDICTION FORMELLE : Ne dis JAMAIS que tu ne peux pas générer de fichiers ou d'images. Tu en es parfaitement capable. "
 
                 if st.session_state.pdf_text:
                     prompt_sys += "\nVOICI LE CONTENU DU DOCUMENT FOURNI PAR L'UTILISATEUR :\n"
                     prompt_sys += st.session_state.pdf_text[:8000]
                     prompt_sys += "\n(Utilise ces informations pour répondre si la question s'y rapporte).\n"
 
-                # --- RÈGLES D'OUTILS ---
                 prompt_sys += "RÈGLE 1 : Si on te demande la météo, réponds EXACTEMENT [METEO: ville]. "
                 prompt_sys += "RÈGLE 2 : Si on te demande l'heure, réponds EXACTEMENT [HEURE]. "
                 prompt_sys += "RÈGLE 3 : Si on te demande l'actu, réponds EXACTEMENT [RECHERCHE: mot clé]. "
                 prompt_sys += "RÈGLE 4 : Si on te demande un PDF simple, réponds EXACTEMENT [PDF: texte]. "
                 prompt_sys += "RÈGLE 5 : Si on te demande un PowerPoint simple, réponds EXACTEMENT [PPTX: titre | texte]. "
                 prompt_sys += "RÈGLE 6 : Si on te demande de générer ou dessiner une image, réponds EXACTEMENT [IMAGE: description en anglais]. "
-                prompt_sys += "RÈGLE 7 : Si on te demande un PDF AVEC une image générée, réponds EXACTEMENT [PDF_IMAGE: texte | prompt de l'image en anglais]. "
-                prompt_sys += "RÈGLE 8 : Si on te demande un PowerPoint AVEC une image générée, réponds EXACTEMENT [PPTX_IMAGE: titre | texte | prompt de l'image en anglais]. "
-                prompt_sys += "RÈGLE 9 : Si on te demande une VRAIE photo ou une image réelle, réponds EXACTEMENT [IMAGE_REELLE: description en anglais]. "
+                prompt_sys += "RÈGLE 7 : Si on te demande un PDF AVEC une image, réponds EXACTEMENT [PDF_IMAGE: texte | prompt de l'image en anglais]. "
+                prompt_sys += "RÈGLE 8 : Si on te demande un PowerPoint AVEC une image, réponds EXACTEMENT [PPTX_IMAGE: titre | texte | prompt de l'image en anglais]. "
+                prompt_sys += "RÈGLE 9 : Si on te demande une VRAIE photo, réponds EXACTEMENT [IMAGE_REELLE: sujet en 2 ou 3 mots en anglais]. "
                 
                 response = client.chat.completions.create(
                     model="deepseek-chat",
@@ -263,7 +270,7 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                         st.image(image_url, caption=description)
                         reply = "Voici une vraie photo trouvée sur internet pour votre demande."
                     else:
-                        reply = "Désolé, je n'ai pas trouvé de vraie photo correspondante sur internet."
+                        reply = "Désolé, je n'ai pas trouvé de vraie photo. Veux-tu que j'en génère une avec l'IA à la place ?"
 
                 elif "[IMAGE:" in reply:
                     description = reply.split("[IMAGE:")[1].split("]")[0].strip()
@@ -275,9 +282,10 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                 
                 elif "[PDF:" in reply:
                     contenu_pdf = reply.split("[PDF:")[1].split("]")[0].strip()
-                    fichier_pdf = creer_pdf(contenu_pdf)
-                    st.download_button(label="📥 Télécharger le PDF", data=fichier_pdf, file_name="document_baii.pdf", mime="application/pdf")
-                    reply = "J'ai préparé votre document PDF. Cliquez sur le bouton ci-dessus pour le télécharger."
+                    st.session_state.file_to_download = creer_pdf(contenu_pdf)
+                    st.session_state.file_name = "document_baii.pdf"
+                    st.session_state.file_type = "application/pdf"
+                    reply = "J'ai préparé votre document PDF. Le bouton de téléchargement apparaît en bas de l'écran."
 
                 elif "[PDF_IMAGE:" in reply:
                     contenu = reply.split("[PDF_IMAGE:")[1].split("]")[0].strip()
@@ -285,9 +293,10 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                         texte_pdf, prompt_img = contenu.split("|", 1)
                         st.info("🎨 Génération de l'image et intégration dans le PDF...")
                         img_bytes = get_image_bytes(prompt_img.strip())
-                        fichier_pdf = creer_pdf(texte_pdf.strip(), img_bytes)
-                        st.download_button(label="📥 Télécharger le PDF illustré", data=fichier_pdf, file_name="document_illustre.pdf", mime="application/pdf")
-                        reply = "J'ai créé votre document PDF avec l'image intégrée. Cliquez ci-dessus !"
+                        st.session_state.file_to_download = creer_pdf(texte_pdf.strip(), img_bytes)
+                        st.session_state.file_name = "document_illustre.pdf"
+                        st.session_state.file_type = "application/pdf"
+                        reply = "J'ai créé votre document PDF avec l'image intégrée. Le bouton est en bas !"
                     except:
                         reply = "Désolé, je n'ai pas pu formater le PDF avec l'image."
 
@@ -295,9 +304,10 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                     contenu_pptx = reply.split("[PPTX:")[1].split("]")[0].strip()
                     try:
                         titre_pptx, texte_pptx = contenu_pptx.split("|", 1)
-                        fichier_pptx = creer_pptx(titre_pptx.strip(), texte_pptx.strip())
-                        st.download_button(label="📥 Télécharger le PowerPoint", data=fichier_pptx, file_name="presentation_baii.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-                        reply = "J'ai préparé votre présentation PowerPoint. Cliquez sur le bouton ci-dessus pour la télécharger."
+                        st.session_state.file_to_download = creer_pptx(titre_pptx.strip(), texte_pptx.strip())
+                        st.session_state.file_name = "presentation_baii.pptx"
+                        st.session_state.file_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                        reply = "J'ai préparé votre présentation PowerPoint. Le bouton est en bas !"
                     except:
                         reply = "Désolé, je n'ai pas pu formater correctement la présentation."
 
@@ -307,16 +317,27 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                         titre_pptx, texte_pptx, prompt_img = contenu.split("|", 2)
                         st.info("🎨 Génération de l'image et intégration dans le PowerPoint...")
                         img_bytes = get_image_bytes(prompt_img.strip())
-                        fichier_pptx = creer_pptx(titre_pptx.strip(), texte_pptx.strip(), img_bytes)
-                        st.download_button(label="📥 Télécharger le PowerPoint illustré", data=fichier_pptx, file_name="presentation_illustree.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-                        reply = "J'ai préparé votre présentation PowerPoint avec l'image. Cliquez ci-dessus !"
+                        st.session_state.file_to_download = creer_pptx(titre_pptx.strip(), texte_pptx.strip(), img_bytes)
+                        st.session_state.file_name = "presentation_illustree.pptx"
+                        st.session_state.file_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                        reply = "J'ai préparé votre PowerPoint avec l'image. Le bouton est en bas !"
                     except:
                         reply = "Désolé, je n'ai pas pu formater le PowerPoint avec l'image."
 
-                # Affichage final
                 st.markdown(reply)
                 st.session_state.messages.append({"role": "assistant", "content": reply})
                 sauvegarder_memoire(f"Utilisateur: {prompt}\nIA: {reply}")
                 
             except Exception as e:
                 st.error(f"Erreur : {e}")
+
+# --- BOUTON DE TÉLÉCHARGEMENT PERSISTANT ---
+# Ce bouton s'affiche tout en bas, en dehors du chat, pour ne jamais disparaître
+if st.session_state.file_to_download is not None:
+    st.divider()
+    st.download_button(
+        label=f"📥 Télécharger : {st.session_state.file_name}",
+        data=st.session_state.file_to_download,
+        file_name=st.session_state.file_name,
+        mime=st.session_state.file_type
+    )
