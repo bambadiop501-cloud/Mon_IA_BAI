@@ -13,7 +13,7 @@ import urllib.parse
 from PIL import Image
 
 # --- PARAMÈTRES DE VOTRE IA ---
-AI_NAME = "B.AII"
+AI_NAME = "B.AI"
 
 try:
     API_KEY = st.secrets["DEEPSEEK_API_KEY"]
@@ -75,13 +75,29 @@ def chercher_internet(requete):
 
 def chercher_image_reelle(requete):
     try:
-        # On ne garde que les 3 premiers mots pour que la recherche fonctionne bien
         requete_courte = " ".join(requete.split()[:3])
-        with DDGS() as ddgs:
-            resultats = list(ddgs.images(requete_courte, max_results=1))
-            if resultats:
-                return resultats[0]['image']
-            return None
+        
+        # Plan A : Essayer DuckDuckGo Images
+        try:
+            with DDGS() as ddgs:
+                resultats = list(ddgs.images(requete_courte, max_results=5))
+                if resultats:
+                    return resultats[0]['image']
+        except:
+            pass # Si DDG plante, on passe au plan B
+            
+        # Plan B : Essayer Wikipédia (Très fiable pour les lieux/villes)
+        try:
+            url = f"https://en.wikipedia.org/w/api.php?action=query&titles={requete_courte}&prop=pageimages&format=json&pithumbsize=1000"
+            response = requests.get(url).json()
+            pages = response.get('query', {}).get('pages', {})
+            for page_id in pages:
+                if 'thumbnail' in pages[page_id]:
+                    return pages[page_id]['thumbnail']['source']
+        except:
+            pass
+
+        return None
     except:
         return None
 
@@ -332,7 +348,6 @@ if prompt := st.chat_input(f"Discutez avec {AI_NAME}..."):
                 st.error(f"Erreur : {e}")
 
 # --- BOUTON DE TÉLÉCHARGEMENT PERSISTANT ---
-# Ce bouton s'affiche tout en bas, en dehors du chat, pour ne jamais disparaître
 if st.session_state.file_to_download is not None:
     st.divider()
     st.download_button(
