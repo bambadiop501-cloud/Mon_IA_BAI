@@ -1,0 +1,8 @@
+# secrets : jamais sur GitHub
+.streamlit/secrets.toml
+.env
+# fichiers de travail
+memoire.txt
+__pycache__/
+*.pyc
+.venv/
