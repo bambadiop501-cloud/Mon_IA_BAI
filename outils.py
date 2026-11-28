@@ -19,7 +19,7 @@ from fpdf import FPDF
 from PIL import Image
 from pptx import Presentation
 from pptx.dml.color import RGBColor
-from pptx.util import Emu, Inches, Pt
+from pptx.util import Inches, Pt
 
 ICI = os.path.dirname(os.path.abspath(__file__))
 LOGO = os.path.join(ICI, "logo.png")
@@ -244,62 +244,110 @@ def image_ia(description: str, format_image: str = "carre") -> bytes | None:
     return _image_hf(description)
 
 
+# ---------------------------------------------------------------- photos et schémas libres de droits
+MOTS_VIDES = {"the", "of", "a", "an", "and", "in", "on", "at", "with", "for", "to", "from", "by", "photo", "picture",
+              "image", "de", "la", "le", "les", "des", "du", "et", "en", "un", "une", "au", "aux", "sur"}
+
+
+def _mots(t: str) -> set[str]:
+    t = unicodedata.normalize("NFKD", t.lower()).encode("ascii", "ignore").decode()
+    return {m[:-1] if m.endswith("s") and len(m) > 4 else m for m in re.findall(r"[a-z0-9]+", t) if m not in MOTS_VIDES and len(m) > 2}
+
+
+def pertinence(sujet: str, texte: str) -> float:
+    """Part des mots importants du sujet qu'on retrouve dans le titre ou la description (0 à 1)."""
+    s = _mots(sujet)
+    return 1.0 if not s else len(s & _mots(texte)) / len(s)
+
+
+SEUIL = 0.5  # au moins la moitié des mots du sujet doivent se retrouver dans la photo choisie
+LANGUE_ETRANGERE = re.compile(r"[-_ (](ar|ru|de|es|it|pt|zh|ja|ko|pl|uk|fa|he|hu|cs|nl|sv|tr|vi|id|ca|eu|gl|ro|bg|sr|hr|sk|sl|el|th|hi|bn|"
+                              r"ta|uz|kk|az|be|ka|hy|mk|lt|lv|et|fi|da|no|nb|ur|ms|sq|bs|cy|ga|is|mt|af|sw|am)(?=[-_ .)]|$)", re.I)
+
+
+def _bonus_langue(titre: str) -> float:
+    """Schémas : légendes en français d'abord, puis sans texte ou en anglais ; les autres langues passent après."""
+    t = re.sub(r"\.(svg|png|jpe?g)$", "", titre, flags=re.I)
+    if re.search(r"[-_ (](fr|french|francais)(?=[-_ .)]|$)", t, re.I):
+        return 0.3
+    return -0.6 if LANGUE_ETRANGERE.search(t) else 0.0
+
+
 def _photo_commons(sujet: str) -> dict | None:
-    r = _get("https://commons.wikimedia.org/w/api.php", params={
-        "action": "query", "generator": "search", "gsrsearch": f"{sujet} filetype:bitmap",
-        "gsrnamespace": 6, "gsrlimit": 6, "prop": "imageinfo", "iiprop": "url|extmetadata|mime",
-        "iiurlwidth": 1200, "format": "json"})
-    if not r:
-        return None
-    pages = sorted((r.json().get("query") or {}).get("pages", {}).values(), key=lambda p: p.get("index", 99))
+    pages = []
+    requetes = [f"{sujet} fr", sujet] if "diagram" in sujet.lower() else [sujet]
+    for q in requetes:
+        r = _get("https://commons.wikimedia.org/w/api.php", params={
+            "action": "query", "generator": "search", "gsrsearch": q, "gsrnamespace": 6, "gsrlimit": 12,
+            "prop": "imageinfo", "iiprop": "url|extmetadata|mime", "iiurlwidth": 1200, "format": "json"})
+        if r:
+            pages += list((r.json().get("query") or {}).get("pages", {}).values())
+    choix, vus = [], set()
     for p in pages:
+        if p.get("title") in vus:
+            continue
+        vus.add(p.get("title"))
         info = (p.get("imageinfo") or [{}])[0]
-        if not info.get("mime", "").startswith("image/") or "svg" in info.get("mime", ""):
+        mime = info.get("mime", "")
+        if not (mime.startswith("image/") and info.get("thumburl")) or "gif" in mime or "tiff" in mime:
             continue
         meta = info.get("extmetadata", {})
-        auteur = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "auteur inconnu")).strip()
-        licence = meta.get("LicenseShortName", {}).get("value", "licence libre")
-        img = _get(info.get("thumburl") or info["url"])
-        if img:
-            return {"octets": img.content, "legende": f"Photo : {auteur[:80]}, {licence}, Wikimedia Commons",
-                    "page": info.get("descriptionurl", "")}
+        desc = re.sub(r"<[^>]+>", " ", meta.get("ImageDescription", {}).get("value", ""))[:400]
+        score = max(pertinence(sujet, p.get("title", "")), 0.9 * pertinence(sujet, desc)) + _bonus_langue(p.get("title", ""))
+        choix.append((score, -p.get("index", 99), info, meta, p.get("title", "")))
+    for score, _, info, meta, titre in sorted(choix, key=lambda x: (x[0], x[1]), reverse=True):
+        if score < SEUIL:
+            break
+        img = _get(info["thumburl"])
+        if img and img.headers.get("content-type", "").startswith("image"):
+            auteur = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "auteur inconnu")).strip()
+            licence = meta.get("LicenseShortName", {}).get("value", "licence libre")
+            return {"octets": img.content, "legende": f"{auteur[:60]}, {licence}, Wikimedia Commons",
+                    "page": info.get("descriptionurl", ""), "titre": titre.replace("File:", "")}
     return None
 
 
 def _photo_wikipedia(sujet: str) -> dict | None:
+    sujet = re.sub(r"\b(diagram|schematic|illustration)\b", "", sujet, flags=re.I).strip() or sujet  # l'image d'un article est souvent un schéma
     for langue in ("en", "fr"):
         r = _get(f"https://{langue}.wikipedia.org/w/api.php", params={
-            "action": "query", "generator": "search", "gsrsearch": sujet, "gsrlimit": 3,
+            "action": "query", "generator": "search", "gsrsearch": sujet, "gsrlimit": 5,
             "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 1000, "format": "json"})
         if not r:
             continue
         pages = sorted((r.json().get("query") or {}).get("pages", {}).values(), key=lambda p: p.get("index", 99))
         for p in pages:
             src = (p.get("thumbnail") or {}).get("source")
-            img = _get(src) if src else None
+            if not src or pertinence(sujet, p.get("title", "")) < SEUIL:
+                continue
+            img = _get(src)
             if img:
                 page = f"https://{langue}.wikipedia.org/wiki/" + urllib.parse.quote(p.get("title", "").replace(" ", "_"))
-                return {"octets": img.content, "legende": f"Photo de l'article Wikipédia « {p.get('title', '')} » (licence libre, voir la source)",
-                        "page": page}
+                return {"octets": img.content, "legende": f"image de l'article Wikipédia « {p.get('title', '')} », licence libre",
+                        "page": page, "titre": p.get("title", "")}
     return None
 
 
 def _photo_openverse(sujet: str) -> dict | None:
-    r = _get("https://api.openverse.org/v1/images/", params={"q": sujet, "page_size": 5})
+    r = _get("https://api.openverse.org/v1/images/", params={"q": sujet, "page_size": 8})
     if not r:
         return None
     for x in r.json().get("results", []):
+        texte = x.get("title", "") + " " + " ".join(t.get("name", "") for t in x.get("tags") or [])
+        if pertinence(sujet, texte) < SEUIL:
+            continue
         img = _get(x.get("url", ""))
         if img and img.headers.get("content-type", "").startswith("image"):
             licence = f"CC {x.get('license', '').upper()} {x.get('license_version', '')}".strip()
-            return {"octets": img.content, "legende": f"Photo : {x.get('creator') or 'auteur inconnu'}, {licence}, via Openverse",
-                    "page": x.get("foreign_landing_url", "")}
+            return {"octets": img.content, "legende": f"{x.get('creator') or 'auteur inconnu'}, {licence}, via Openverse",
+                    "page": x.get("foreign_landing_url", ""), "titre": x.get("title", "")}
     return None
 
 
 def photo_libre(sujet: str) -> dict | None:
-    """Vraie photo libre de droits avec son crédit : Wikimedia Commons, puis Wikipédia, puis Openverse."""
-    for source in (_photo_commons, _photo_wikipedia, _photo_openverse):
+    """Vraie photo ou schéma libre de droits, avec son crédit. On ne garde qu'une image qui correspond au sujet."""
+    sources = (_photo_commons, _photo_wikipedia) if "diagram" in sujet.lower() else (_photo_commons, _photo_wikipedia, _photo_openverse)
+    for source in sources:
         try:
             p = source(sujet)
             if p:
@@ -307,6 +355,23 @@ def photo_libre(sujet: str) -> dict | None:
         except (KeyError, ValueError, TypeError):
             continue
     return None
+
+
+def en_jpeg(octets: bytes, max_cote: int = 1600) -> io.BytesIO:
+    """Toute image (PNG transparent, WebP…) en JPEG sur fond blanc, pour le PDF et le PowerPoint."""
+    im = Image.open(io.BytesIO(octets))
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        fond = Image.new("RGB", im.size, (255, 255, 255))
+        fond.paste(im, mask=im.split()[-1])
+        im = fond
+    else:
+        im = im.convert("RGB")
+    im.thumbnail((max_cote, max_cote))
+    tampon = io.BytesIO()
+    im.save(tampon, "JPEG", quality=86)
+    tampon.seek(0)
+    return tampon
 
 
 # ---------------------------------------------------------------- PDF
@@ -336,7 +401,36 @@ class _PDF(FPDF):
         self.cell(0, 8, f"Créé avec B.AI · page {self.page_no()}/{{nb}}", align="C")
 
 
-def creer_pdf(titre: str, contenu: str, image: bytes | None = None) -> bytes:
+MARQUE = re.compile(r"^\s*\[\[\s*(?:image|illustration|photo|schema|schéma)\s*(\d+)\s*\]\]\s*$", re.I)
+
+
+def _poser_image(pdf: FPDF, illus: dict, max_h: float = 95) -> None:
+    """Image centrée et sa légende ; nouvelle page si la place manque."""
+    try:
+        tampon = en_jpeg(illus["octets"])
+        w_px, h_px = Image.open(tampon).size
+        tampon.seek(0)
+    except Exception:
+        return
+    largeur = 150
+    hauteur = largeur * h_px / w_px
+    if hauteur > max_h:
+        hauteur, largeur = max_h, max_h * w_px / h_px
+    if pdf.get_y() + hauteur + 14 > pdf.h - 20:
+        pdf.add_page()
+    pdf.ln(2)
+    pdf.image(tampon, x=(210 - largeur) / 2, w=largeur, h=hauteur)
+    if illus.get("legende"):
+        pdf.set_font("dejavu", "", 8.5)
+        pdf.set_text_color(110, 110, 125)
+        pdf.multi_cell(0, 4.6, _propre(illus["legende"])[:220], align="C")
+        pdf.set_text_color(25, 25, 32)
+    pdf.ln(4)
+
+
+def creer_pdf(titre: str, contenu: str, illustrations: list | None = None) -> bytes:
+    """PDF soigné. Les lignes [[image 1]], [[image 2]]… du contenu placent les illustrations à cet endroit."""
+    illustrations = list(illustrations or [])
     pdf = _PDF(format="A4")
     pdf.titre_doc = titre
     pdf.add_font("dejavu", "", POLICE)
@@ -359,21 +453,19 @@ def creer_pdf(titre: str, contenu: str, image: bytes | None = None) -> bytes:
     pdf.cell(0, 5, f"B.AI · {date_longue(datetime.now(ZoneInfo(FUSEAU_DEFAUT)))}")
     pdf.set_y(56)
     pdf.set_text_color(25, 25, 32)
-    if image:
-        try:
-            im = Image.open(io.BytesIO(image)).convert("RGB")
-            tampon = io.BytesIO()
-            im.save(tampon, "JPEG", quality=85)
-            largeur = 174
-            hauteur = largeur * im.height / im.width
-            if hauteur > 110:
-                hauteur, largeur = 110, 110 * im.width / im.height
-            pdf.image(tampon, x=(210 - largeur) / 2, w=largeur)
-            pdf.ln(6)
-        except Exception:
-            pass
-    for ligne in _propre(contenu).replace("\r", "").split("\n"):
+    lignes = _propre(contenu).replace("\r", "").split("\n")
+    places = {int(m.group(1)) for m in (MARQUE.match(l) for l in lignes) if m}
+    if illustrations and illustrations[0] and 1 not in places:  # la première illustration ouvre le document
+        _poser_image(pdf, illustrations[0], max_h=100)
+        places.add(1)
+    for ligne in lignes:
         l = ligne.rstrip()
+        m = MARQUE.match(l)
+        if m:
+            k = int(m.group(1))
+            if 1 <= k <= len(illustrations) and illustrations[k - 1]:
+                _poser_image(pdf, illustrations[k - 1])
+            continue
         if not l.strip():
             pdf.ln(3)
             continue
@@ -391,6 +483,13 @@ def creer_pdf(titre: str, contenu: str, image: bytes | None = None) -> bytes:
             pdf.multi_cell(0, 6.4, "• " + puce.group(1), markdown=True)
         else:
             pdf.multi_cell(0, 6.4, l, markdown=True)
+    reste = [x for k, x in enumerate(illustrations, start=1) if x and k not in places]
+    if reste:
+        pdf.ln(4)
+        pdf.set_font("dejavu", "B", 14)
+        pdf.multi_cell(0, 8, "Illustrations")
+        for x in reste:
+            _poser_image(pdf, x)
     return bytes(pdf.output())
 
 
@@ -414,17 +513,36 @@ def _texte(diapo, x, y, w, h, texte, taille, couleur, gras=False):
     return tf
 
 
-def creer_pptx(titre: str, diapos: list[dict], image: bytes | None = None) -> bytes:
+def _image_dans(diapo, octets: bytes, x, y, w_max, h_max):
+    """Place une image dans un cadre en gardant ses proportions."""
+    tampon = en_jpeg(octets)
+    w_px, h_px = Image.open(tampon).size
+    tampon.seek(0)
+    w, h = w_max, int(w_max * h_px / w_px)
+    if h > h_max:
+        h, w = h_max, int(h_max * w_px / h_px)
+    diapo.shapes.add_picture(tampon, int(x + (w_max - w) / 2), int(y + (h_max - h) / 2), int(w), int(h))
+
+
+def creer_pptx(titre: str, diapos: list[dict], illustrations: dict | None = None, couverture: dict | None = None) -> bytes:
+    """Présentation 16:9. `illustrations` associe le numéro d'une diapositive (1 = première après la couverture) à une image."""
+    illustrations = illustrations or {}
     prs = Presentation()
     prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
     vide = prs.slide_layouts[6]
     # couverture
     d = prs.slides.add_slide(vide)
     _fond(d, NOIR)
+    if couverture:
+        try:
+            _image_dans(d, couverture["octets"], Inches(7.4), Inches(0.6), Inches(5.4), Inches(6.3))
+        except Exception:
+            couverture = None
     if os.path.exists(LOGO):
         d.shapes.add_picture(LOGO, Inches(0.8), Inches(0.7), height=Inches(1.6))
-    _texte(d, Inches(0.8), Inches(2.9), Inches(11.5), Inches(2.4), titre, 46, BLANC, True)
-    _texte(d, Inches(0.8), Inches(6.3), Inches(11), Inches(0.6),
+    largeur_titre = Inches(6.3) if couverture else Inches(11.5)
+    _texte(d, Inches(0.8), Inches(2.9), largeur_titre, Inches(2.4), titre, 44 if couverture else 46, BLANC, True)
+    _texte(d, Inches(0.8), Inches(6.3), Inches(6.5), Inches(0.6),
            f"Préparé avec B.AI · {date_longue(datetime.now(ZoneInfo(FUSEAU_DEFAUT)))}", 14, GRIS)
     # contenu
     for i, s in enumerate(diapos or [], start=1):
@@ -434,34 +552,31 @@ def creer_pptx(titre: str, diapos: list[dict], image: bytes | None = None) -> by
         barre.fill.solid()
         barre.fill.fore_color.rgb = ACCENT
         barre.line.fill.background()
-        _texte(d, Inches(0.8), Inches(0.6), Inches(11.5), Inches(1.2), str(s.get("titre", "")), 34, NOIR, True)
-        tf = _texte(d, Inches(0.8), Inches(1.9), Inches(11.6), Inches(5), "", 20, NOIR)
+        illus = illustrations.get(i)
+        largeur = Inches(6.6) if illus else Inches(11.6)
+        _texte(d, Inches(0.8), Inches(0.6), Inches(11.5) if not illus else Inches(6.8), Inches(1.2), str(s.get("titre", "")), 32 if illus else 34, NOIR, True)
+        tf = _texte(d, Inches(0.8), Inches(1.9), largeur, Inches(5), "", 20, NOIR)
         points = [str(p) for p in (s.get("points") or [])][:8]
         for j, pt in enumerate(points):
             p = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
             p.text = "•  " + pt
-            p.font.size, p.font.color.rgb = Pt(22 if len(points) <= 5 else 18), RGBColor(30, 30, 40)
+            p.font.size, p.font.color.rgb = Pt((20 if illus else 22) if len(points) <= 5 else 17), RGBColor(30, 30, 40)
             p.space_after = Pt(10)
+        if illus:
+            try:
+                _image_dans(d, illus["octets"], Inches(7.7), Inches(0.9), Inches(5.1), Inches(5.3))
+                if illus.get("legende"):
+                    _texte(d, Inches(7.7), Inches(6.3), Inches(5.1), Inches(0.5), _propre(illus["legende"])[:140], 10, GRIS)
+            except Exception:
+                pass
         _texte(d, Inches(11.6), Inches(6.85), Inches(1.4), Inches(0.4), str(i + 1), 12, GRIS)
-    if image:
-        try:
-            im = Image.open(io.BytesIO(image))
-            d = prs.slides.add_slide(vide)
-            _fond(d, NOIR)
-            h = Inches(6.3)
-            w = Emu(int(h * im.width / im.height))
-            if w > Inches(12.3):
-                w = Inches(12.3)
-                h = Emu(int(w * im.height / im.width))
-            d.shapes.add_picture(io.BytesIO(image), int((prs.slide_width - w) / 2), int((prs.slide_height - h) / 2), w, h)
-        except Exception:
-            pass
     tampon = io.BytesIO()
     prs.save(tampon)
     return tampon.getvalue()
 
 
 def nom_fichier(titre: str, ext: str) -> str:
-    sans_accents = unicodedata.normalize("NFKD", titre.lower()).encode("ascii", "ignore").decode()
+    titre = titre.lower().replace("œ", "oe").replace("æ", "ae")
+    sans_accents = unicodedata.normalize("NFKD", titre).encode("ascii", "ignore").decode()
     base = re.sub(r"[^a-z0-9]+", "-", sans_accents).strip("-")[:40]
     return f"{base or 'document'}-bai.{ext}"

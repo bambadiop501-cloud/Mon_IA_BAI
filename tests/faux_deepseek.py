@@ -12,10 +12,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 OUTILS = [
     ("météo", "meteo", {"ville": "Dakar"}),
     ("heure", "heure", {"ville": "Montréal"}),
-    ("powerpoint", "creer_powerpoint", {"titre": "Le recyclage au Sénégal", "diapos": [
-        {"titre": "Pourquoi recycler ?", "points": ["Moins de déchets", "Des emplois", "Une ville plus propre"]},
+    ("powerpoint", "creer_powerpoint", {"titre": "Le recyclage au Sénégal",
+        "couverture": {"source": "ia", "description_en": "colorful recycled plastic bottles art in a sunny Dakar street, realistic photo"},
+        "diapos": [
+        {"titre": "Pourquoi recycler ?", "points": ["Moins de déchets", "Des emplois", "Une ville plus propre"],
+         "illustration": {"source": "photo", "description_en": "Lake Retba Senegal", "legende": "Le lac Rose"}},
         {"titre": "Comment agir", "points": ["Trier", "Réutiliser", "Composter"]}]}),
-    ("pdf", "creer_pdf", {"titre": "Fiche : la cellule", "contenu": "# La cellule\nL’unité du **vivant**.\n- Noyau\n- Mitochondrie"}),
+    ("pdf", "creer_pdf", {"titre": "Fiche : le cœur humain", "contenu": "# Le cœur\nL’organe qui fait circuler le **sang**.\n[[image 1]]\n## Les cavités\n- 2 oreillettes\n- 2 ventricules",
+                          "illustrations": [{"source": "photo", "description_en": "human heart diagram", "legende": "Schéma du cœur"}]}),
     ("image", "creer_image", {"description_en": "a colorful pirogue on a beach at sunset", "format_image": "paysage"}),
     ("photo", "photo_reelle", {"sujet_en": "Lake Retba Senegal"}),
     ("retiens", "retenir", {"fait": "Elle est en terminale à Thiès"}),
@@ -44,7 +48,7 @@ class Faux(BaseHTTPRequestHandler):
         dernier = msgs[-1]
         morceaux = []
         if dernier["role"] == "tool":
-            texte = "Voilà ce que j'ai : " + dernier["content"][:160]
+            texte = "Voilà ce que j'ai : " + dernier["content"][:160] + "\n>>> Fais-en un PDF | Explique plus simplement | Donne-moi un quiz"
             morceaux = [morceau({"role": "assistant", "content": texte[i:i + 12]}) for i in range(0, len(texte), 12)]
         else:
             q = dernier["content"].lower()
