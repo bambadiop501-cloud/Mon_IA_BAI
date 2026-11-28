@@ -19,8 +19,16 @@ from openai import (APIConnectionError, APIStatusError, APITimeoutError, Authent
                     OpenAI, RateLimitError)
 from pypdf import PdfReader
 
+import importlib
+
 import cerveau
 import outils
+
+# Après une mise à jour sur GitHub, Streamlit Cloud peut garder l'ancienne version de ces fichiers en mémoire :
+# on la recharge si elle ne correspond pas à interface.py.
+if not hasattr(cerveau, "Tour") or not hasattr(outils, "pertinence"):
+    outils = importlib.reload(outils)
+    cerveau = importlib.reload(cerveau)
 
 ICI = os.path.dirname(os.path.abspath(__file__))
 LOGO = os.path.join(ICI, "logo.png")
