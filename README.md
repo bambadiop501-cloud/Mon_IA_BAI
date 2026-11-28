@@ -55,4 +55,5 @@ La première ligne vérifie la boucle de réponse, le PDF et la mémoire. Les de
 - **La mémoire est propre à chaque visiteur** et s'efface quand on ferme la page. Personne ne voit ce que les autres ont dit.
 - Les services gratuits d'images et de recherche sont parfois saturés. B.AI réessaie, puis le dit simplement.
 - Les images de Pollinations portent parfois une petite mention « pollinations.ai » dans un coin.
-- Réglages facultatifs dans les secrets : `DEEPSEEK_MODEL` (par défaut `deepseek-chat`) et `DEEPSEEK_BASE_URL`.
+- Réglages facultatifs dans les secrets : `DEEPSEEK_MODEL` (par défaut `deepseek-chat`), `DEEPSEEK_BASE_URL`, `HF_TOKEN` (un jeton Hugging Face gratuit : B.AI s'en sert pour les images quand Pollinations est saturé) et `TAVILY_API_KEY` (clé gratuite sur tavily.com, 1 000 recherches par mois : recherche web fiable, car les moteurs gratuits bloquent souvent les serveurs).
+- Chaque outil a des secours : recherche (Tavily si `TAVILY_API_KEY`, puis DuckDuckGo et Google, puis Wikipédia), photos (Wikimedia Commons, Wikipédia, Openverse), images (Pollinations, Hugging Face si `HF_TOKEN`, puis chargement direct par le navigateur).

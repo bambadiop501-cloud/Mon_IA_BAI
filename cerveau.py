@@ -122,7 +122,7 @@ def executer(nom: str, args: dict, pieces: list, memoire: list[str]) -> str:
         if nom == "photo_reelle":
             p = outils.photo_libre(str(args.get("sujet_en", "")))
             if not p:
-                return "Aucune photo libre trouvée. Propose une image générée par IA à la place."
+                return "Aucune photo libre trouvée (sujet introuvable ou banques de photos saturées). Dis-le simplement et propose une image générée par IA à la place."
             pieces.append({"type": "image", "octets": p["octets"], "legende": p["legende"], "lien": p["page"],
                            "nom": outils.nom_fichier(str(args.get("sujet_en", "photo")), "jpg")})
             return f"Photo affichée sous ta réponse. Crédit à mentionner : {p['legende']}."

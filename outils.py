@@ -26,7 +26,7 @@ LOGO = os.path.join(ICI, "logo.png")
 POLICE = os.path.join(ICI, "fonts", "DejaVuSans.ttf")
 POLICE_GRAS = os.path.join(ICI, "fonts", "DejaVuSans-Bold.ttf")
 FUSEAU_DEFAUT = "Africa/Dakar"
-ENTETES = {"User-Agent": "B.AI/2.0 (assistant personnel)"}
+ENTETES = {"User-Agent": "B.AI/2.0 (https://github.com/bambadiop501-cloud/mon_ia_bai)"}
 DELAI = 20  # secondes, pour tous les appels à internet
 
 JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
@@ -117,28 +117,90 @@ def meteo_secours(ville: str) -> str:
         return "Le service météo ne répond pas pour le moment."
 
 
-# ---------------------------------------------------------------- recherche web
-def recherche_web(requete: str, actualites: bool = False) -> str:
-    try:
+# ---------------------------------------------------------------- appels prudents
+def _get(url: str, essais: int = 2, **kw) -> requests.Response | None:
+    """GET avec délai et une nouvelle tentative si le service dit « trop de demandes »."""
+    kw.setdefault("headers", ENTETES)
+    kw.setdefault("timeout", DELAI)
+    for i in range(essais):
         try:
-            from ddgs import DDGS
-        except ImportError:  # ancien nom du paquet
-            from duckduckgo_search import DDGS
-        with DDGS() as d:
-            if actualites:
-                res = list(d.news(requete, region="fr-fr", max_results=6))
-            else:
-                res = list(d.text(requete, region="fr-fr", max_results=6))
-    except Exception:
-        return "La recherche web ne répond pas pour le moment (service gratuit parfois saturé). Réponds avec tes connaissances en le signalant."
+            r = requests.get(url, **kw)
+        except requests.RequestException:
+            r = None
+        if r is not None and r.status_code == 200:
+            return r
+        if i < essais - 1:
+            attente = 3
+            if r is not None and r.status_code in (429, 503):
+                try:
+                    attente = min(6, int(r.headers.get("Retry-After", 3)))
+                except ValueError:
+                    pass
+            time.sleep(attente)
+    return None
+
+
+# ---------------------------------------------------------------- recherche web
+def _wikipedia(requete: str) -> list[dict]:
+    """Dernier recours : articles Wikipédia en français."""
+    r = _get("https://fr.wikipedia.org/w/api.php", params={"action": "query", "list": "search", "srsearch": requete,
+                                                           "srlimit": 5, "format": "json", "utf8": 1})
+    if not r:
+        return []
+    res = []
+    for x in r.json().get("query", {}).get("search", []):
+        titre = x.get("title", "")
+        res.append({"title": titre, "body": re.sub(r"<[^>]+>", "", x.get("snippet", "")),
+                    "href": "https://fr.wikipedia.org/wiki/" + urllib.parse.quote(titre.replace(" ", "_"))})
+    return res
+
+
+def _tavily(requete: str, actualites: bool) -> list[dict]:
+    """Moteur fiable (gratuit jusqu'à 1 000 recherches par mois), seulement si TAVILY_API_KEY est réglé."""
+    cle = os.environ.get("TAVILY_API_KEY", "").strip()
+    if not cle:
+        return []
+    try:
+        r = requests.post("https://api.tavily.com/search", timeout=DELAI,
+                          headers={"Authorization": f"Bearer {cle}", **ENTETES},
+                          json={"query": requete, "max_results": 6, "topic": "news" if actualites else "general"})
+        if r.status_code != 200:
+            return []
+        return [{"title": x.get("title", ""), "body": x.get("content", ""), "href": x.get("url", ""),
+                 "date": x.get("published_date") or ""} for x in r.json().get("results", [])]
+    except (requests.RequestException, ValueError):
+        return []
+
+
+def recherche_web(requete: str, actualites: bool = False) -> str:
+    """Plusieurs moteurs l'un après l'autre : le premier qui répond gagne."""
+    try:
+        from ddgs import DDGS
+    except ImportError:  # ancien nom du paquet
+        from duckduckgo_search import DDGS
+    res, source = _tavily(requete, actualites), "web"
+    moteurs = ["auto"] if actualites else ["auto", "google"]
+    for moteur in ([] if res else moteurs):
+        try:
+            with DDGS(timeout=6) as d:
+                f = d.news if actualites else d.text
+                res = list(f(requete, region="fr-fr", max_results=6, backend=moteur))
+            if res:
+                break
+        except Exception:
+            continue
+    if not res and not actualites:
+        res, source = _wikipedia(requete), "Wikipédia"
     if not res:
-        return "Aucun résultat."
+        return ("La recherche web ne répond pas pour le moment (moteurs gratuits saturés). "
+                "Dis-le simplement, réponds avec tes connaissances en précisant qu'elles peuvent dater, et propose de réessayer plus tard.")
     lignes = []
     for x in res:
         url = x.get("href") or x.get("url") or ""
         date = f" ({x['date'][:10]})" if x.get("date") else ""
         lignes.append(f"- {x.get('title', '')}{date} : {x.get('body', '')[:300]} [{url}]")
-    return "Résultats (cite tes sources avec leurs liens) :\n" + "\n".join(lignes)
+    entete = "Résultats" + (" (source : Wikipédia, les moteurs web étaient saturés)" if source == "Wikipédia" else "")
+    return entete + " — cite tes sources avec leurs liens :\n" + "\n".join(lignes)
 
 
 # ---------------------------------------------------------------- images
@@ -150,8 +212,23 @@ def lien_image_ia(description: str, format_image: str = "carre") -> str:
     return f"https://image.pollinations.ai/prompt/{urllib.parse.quote(description)}?width={w}&height={h}&nologo=true"
 
 
+def _image_hf(description: str) -> bytes | None:
+    """Secours : Hugging Face (FLUX.1 schnell), seulement si un jeton HF_TOKEN est réglé."""
+    jeton = os.environ.get("HF_TOKEN", "").strip()
+    if not jeton:
+        return None
+    try:
+        r = requests.post("https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
+                          headers={"Authorization": f"Bearer {jeton}", **ENTETES}, json={"inputs": description}, timeout=90)
+        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+            return r.content
+    except requests.RequestException:
+        pass
+    return None
+
+
 def image_ia(description: str, format_image: str = "carre") -> bytes | None:
-    """Image générée par Pollinations (service gratuit, parfois saturé : on réessaie 3 fois)."""
+    """Image IA : Pollinations (gratuit, parfois saturé, 3 essais), puis Hugging Face si un jeton est réglé."""
     url = lien_image_ia(description, format_image)
     for essai in range(3):
         try:
@@ -159,35 +236,76 @@ def image_ia(description: str, format_image: str = "carre") -> bytes | None:
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
                 return r.content
             if r.status_code == 400:
-                return None
-            time.sleep(min(12, int(r.headers.get("Retry-After", 8) or 8)))
+                break
+            if essai < 2:
+                time.sleep(min(10, int(r.headers.get("Retry-After", 6) or 6)))
         except (requests.RequestException, ValueError):
             pass
+    return _image_hf(description)
+
+
+def _photo_commons(sujet: str) -> dict | None:
+    r = _get("https://commons.wikimedia.org/w/api.php", params={
+        "action": "query", "generator": "search", "gsrsearch": f"{sujet} filetype:bitmap",
+        "gsrnamespace": 6, "gsrlimit": 6, "prop": "imageinfo", "iiprop": "url|extmetadata|mime",
+        "iiurlwidth": 1200, "format": "json"})
+    if not r:
+        return None
+    pages = sorted((r.json().get("query") or {}).get("pages", {}).values(), key=lambda p: p.get("index", 99))
+    for p in pages:
+        info = (p.get("imageinfo") or [{}])[0]
+        if not info.get("mime", "").startswith("image/") or "svg" in info.get("mime", ""):
+            continue
+        meta = info.get("extmetadata", {})
+        auteur = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "auteur inconnu")).strip()
+        licence = meta.get("LicenseShortName", {}).get("value", "licence libre")
+        img = _get(info.get("thumburl") or info["url"])
+        if img:
+            return {"octets": img.content, "legende": f"Photo : {auteur[:80]}, {licence}, Wikimedia Commons",
+                    "page": info.get("descriptionurl", "")}
+    return None
+
+
+def _photo_wikipedia(sujet: str) -> dict | None:
+    for langue in ("en", "fr"):
+        r = _get(f"https://{langue}.wikipedia.org/w/api.php", params={
+            "action": "query", "generator": "search", "gsrsearch": sujet, "gsrlimit": 3,
+            "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 1000, "format": "json"})
+        if not r:
+            continue
+        pages = sorted((r.json().get("query") or {}).get("pages", {}).values(), key=lambda p: p.get("index", 99))
+        for p in pages:
+            src = (p.get("thumbnail") or {}).get("source")
+            img = _get(src) if src else None
+            if img:
+                page = f"https://{langue}.wikipedia.org/wiki/" + urllib.parse.quote(p.get("title", "").replace(" ", "_"))
+                return {"octets": img.content, "legende": f"Photo de l'article Wikipédia « {p.get('title', '')} » (licence libre, voir la source)",
+                        "page": page}
+    return None
+
+
+def _photo_openverse(sujet: str) -> dict | None:
+    r = _get("https://api.openverse.org/v1/images/", params={"q": sujet, "page_size": 5})
+    if not r:
+        return None
+    for x in r.json().get("results", []):
+        img = _get(x.get("url", ""))
+        if img and img.headers.get("content-type", "").startswith("image"):
+            licence = f"CC {x.get('license', '').upper()} {x.get('license_version', '')}".strip()
+            return {"octets": img.content, "legende": f"Photo : {x.get('creator') or 'auteur inconnu'}, {licence}, via Openverse",
+                    "page": x.get("foreign_landing_url", "")}
     return None
 
 
 def photo_libre(sujet: str) -> dict | None:
-    """Vraie photo sous licence libre (Wikimedia Commons), avec son auteur et sa licence."""
-    try:
-        r = requests.get("https://commons.wikimedia.org/w/api.php", headers=ENTETES, timeout=DELAI, params={
-            "action": "query", "generator": "search", "gsrsearch": f"{sujet} filetype:bitmap",
-            "gsrnamespace": 6, "gsrlimit": 6, "prop": "imageinfo", "iiprop": "url|extmetadata|mime",
-            "iiurlwidth": 1200, "format": "json"})
-        r.raise_for_status()
-        pages = sorted((r.json().get("query") or {}).get("pages", {}).values(), key=lambda p: p.get("index", 99))
-        for p in pages:
-            info = (p.get("imageinfo") or [{}])[0]
-            if not info.get("mime", "").startswith("image/") or "svg" in info.get("mime", ""):
-                continue
-            meta = info.get("extmetadata", {})
-            auteur = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "auteur inconnu")).strip()
-            licence = meta.get("LicenseShortName", {}).get("value", "licence libre")
-            img = requests.get(info.get("thumburl") or info["url"], headers=ENTETES, timeout=DELAI)
-            if img.status_code == 200:
-                return {"octets": img.content, "legende": f"Photo : {auteur[:80]}, {licence}, Wikimedia Commons",
-                        "page": info.get("descriptionurl", "")}
-    except (requests.RequestException, KeyError, ValueError):
-        pass
+    """Vraie photo libre de droits avec son crédit : Wikimedia Commons, puis Wikipédia, puis Openverse."""
+    for source in (_photo_commons, _photo_wikipedia, _photo_openverse):
+        try:
+            p = source(sujet)
+            if p:
+                return p
+        except (KeyError, ValueError, TypeError):
+            continue
     return None
 
 

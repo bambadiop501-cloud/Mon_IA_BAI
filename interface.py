@@ -37,6 +37,9 @@ def config(nom: str, defaut: str = "") -> str:
 CLE = config("DEEPSEEK_API_KEY")
 MODELE = config("DEEPSEEK_MODEL", "deepseek-chat")
 ADRESSE = config("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+for _nom in ("HF_TOKEN", "TAVILY_API_KEY"):  # facultatifs : secours pour les images IA et la recherche web
+    if config(_nom):
+        os.environ[_nom] = config(_nom)
 
 st.set_page_config(page_title=cerveau.NOM, page_icon=AVATAR_IA, layout="centered")
 
